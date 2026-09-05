@@ -139,13 +139,25 @@ class WindowManipulationObservers {
     }
 
     @MainActor
+    static func didEvictTerminatedApps(_ pids: [pid_t]) {
+        guard let instance = activeWindowManipulationObserversInstance else { return }
+        for pid in pids {
+            instance.handleAppTermination(pid: pid)
+        }
+    }
+
+    @MainActor
     private func handleAppTermination(_ app: NSRunningApplication) {
-        WindowUtil.purgeAppCache(with: app.processIdentifier)
-        removeObserver(for: app.processIdentifier)
+        handleAppTermination(pid: app.processIdentifier)
+    }
+
+    @MainActor
+    private func handleAppTermination(pid: pid_t) {
+        WindowUtil.purgeAppCache(with: pid)
+        removeObserver(for: pid)
 
         let coordinator = previewCoordinator.windowSwitcherCoordinator
         if coordinator.isKeybindSessionActive {
-            let pid = app.processIdentifier
             for i in stride(from: coordinator.windows.count - 1, through: 0, by: -1) {
                 if coordinator.windows[i].app.processIdentifier == pid {
                     coordinator.removeWindow(at: i)

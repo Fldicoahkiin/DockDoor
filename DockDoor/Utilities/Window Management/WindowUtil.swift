@@ -730,7 +730,22 @@ extension WindowUtil {
 // MARK: - Window Discovery
 
 extension WindowUtil {
+    static func isProcessAlive(_ pid: pid_t) -> Bool {
+        pid > 0 && (kill(pid, 0) == 0 || errno == EPERM)
+    }
+
+    static func evictTerminatedApps() {
+        let dead = desktopSpaceWindowCacheManager.cachedPIDs().filter { !isProcessAlive($0) }
+        guard !dead.isEmpty else { return }
+        for pid in dead {
+            DebugLogger.log("evictTerminatedApp", details: "PID: \(pid)")
+            purgeAppCache(with: pid)
+        }
+        Task { @MainActor in WindowManipulationObservers.didEvictTerminatedApps(dead) }
+    }
+
     static func getAllWindowsOfAllApps() -> [WindowInfo] {
+        evictTerminatedApps()
         let windows = desktopSpaceWindowCacheManager.getAllWindows()
         var filteredWindows = !Defaults[.includeHiddenWindowsInSwitcher]
             ? windows.filter { !$0.isHidden && !$0.isMinimized }
@@ -745,7 +760,8 @@ extension WindowUtil {
     }
 
     static func getAllWindowsIgnoringSwitcherFilters() -> [WindowInfo] {
-        sortWindowsForSwitcher(desktopSpaceWindowCacheManager.getAllWindows())
+        evictTerminatedApps()
+        return sortWindowsForSwitcher(desktopSpaceWindowCacheManager.getAllWindows())
     }
 
     static func getWindowsForFrontmostApp(from windows: [WindowInfo]) -> [WindowInfo] {
@@ -1514,6 +1530,11 @@ extension WindowUtil {
         } else {
             let existingWindowsSet = desktopSpaceWindowCacheManager.readCache(pid: pid)
             if existingWindowsSet.isEmpty {
+                return nil
+            }
+
+            if !isProcessAlive(pid) {
+                evictTerminatedApps()
                 return nil
             }
 
