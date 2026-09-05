@@ -546,9 +546,12 @@ extension WindowUtil {
             [.ignoreGlobalClipShape, .fullSize, qualityOption]
         ) as? [CGImage]
         let capturedImage = capturedWindows?.first
+        let entry = (CGWindowListCopyWindowInfo(.optionIncludingWindow, windowID) as? [[String: AnyObject]])?.first
+        let bounds = (entry?[kCGWindowBounds as String] as? NSDictionary).flatMap { CGRect(dictionaryRepresentation: $0) }
         let transparent = capturedImage.map(isFullyTransparent) ?? false
-        logCapture(windowID: windowID, pid: pid, title: windowTitle, image: capturedImage, transparent: transparent, quality: qualityOption)
-        guard let capturedImage, !transparent else {
+        let clipped = capturedImage.map { isClippedBySpaceTransition($0, bounds: bounds, windowID: windowID) } ?? false
+        logCapture(windowID: windowID, pid: pid, title: windowTitle, image: capturedImage, transparent: transparent, clipped: clipped, entry: entry, quality: qualityOption)
+        guard let capturedImage, !transparent, !clipped else {
             throw captureError
         }
         cgImage = capturedImage
@@ -581,16 +584,24 @@ extension WindowUtil {
         return cgImage
     }
 
-    private static func logCapture(windowID: CGWindowID, pid: pid_t, title: String?, image: CGImage?, transparent: Bool, quality: CGSWindowCaptureOptions) {
+    private static func isClippedBySpaceTransition(_ image: CGImage, bounds: CGRect?, windowID: CGWindowID) -> Bool {
+        guard let bounds, bounds.width > 0, bounds.height > 0, image.height > 0 else { return false }
+        let imageAspect = CGFloat(image.width) / CGFloat(image.height)
+        let boundsAspect = bounds.width / bounds.height
+        guard abs(imageAspect - boundsAspect) / boundsAspect > 0.02 else { return false }
+        let spaces = Set(windowID.cgsSpaces().map { Int($0) })
+        return !spaces.isEmpty && spaces.isDisjoint(with: currentActiveSpaceIDs())
+    }
+
+    private static func logCapture(windowID: CGWindowID, pid: pid_t, title: String?, image: CGImage?, transparent: Bool, clipped: Bool, entry: [String: AnyObject]?, quality: CGSWindowCaptureOptions) {
         guard Defaults[.debugMode] else { return }
-        let entry = (CGWindowListCopyWindowInfo(.optionIncludingWindow, windowID) as? [[String: AnyObject]])?.first
         let bounds = (entry?[kCGWindowBounds as String] as? [String: AnyObject]).map {
             "\(($0["Width"] as? NSNumber)?.intValue ?? -1)x\(($0["Height"] as? NSNumber)?.intValue ?? -1)@\(($0["X"] as? NSNumber)?.intValue ?? -1),\(($0["Y"] as? NSNumber)?.intValue ?? -1)"
         } ?? "none"
         let onscreen = (entry?[kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue ?? false
         let spaces = windowID.cgsSpaces()
         let active = currentActiveSpaceIDs()
-        let result = image.map { "\($0.width)x\($0.height)\(transparent ? " transparent" : "")" } ?? "nil"
+        let result = image.map { "\($0.width)x\($0.height)\(transparent ? " transparent" : "")\(clipped ? " clipped" : "")" } ?? "nil"
         DebugLogger.log("captureWindowImage", details: "PID: \(pid), window: \(windowID), title: \(title ?? ""), image: \(result), bounds: \(bounds), onscreen: \(onscreen), spaces: \(spaces), activeSpaces: \(active.sorted()), quality: \(quality == .bestResolution ? "best" : "nominal")")
     }
 
